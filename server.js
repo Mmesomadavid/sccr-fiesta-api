@@ -15,7 +15,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173", // local frontend
-      "https://sccr-fiesta.vercel.app", // your deployed frontend
+      "https://www.soccerfirsteleven.com", // your deployed frontend
     ],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -38,7 +38,7 @@ app.use(
         connectSrc: [
           "'self'",
           "https://sccr-fiesta-api.vercel.app", // your API domain
-          "https://sccr-fiesta.vercel.app", // your frontend domain
+          "https://www.soccerfirsteleven.com", // your frontend domain
         ],
       },
     },
