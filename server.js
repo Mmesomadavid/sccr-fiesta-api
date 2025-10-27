@@ -1,30 +1,42 @@
-// server.js
-import express from "express";
-import mongoose from "mongoose";
-import cors from "cors";
-import dotenv from "dotenv";
-import nodemailer from "nodemailer";
-import helmet from "helmet";
+import express from "express"
+import mongoose from "mongoose"
+import cors from "cors"
+import dotenv from "dotenv"
+import nodemailer from "nodemailer"
+import helmet from "helmet"
+import multer from "multer"
+import { v2 as cloudinary } from "cloudinary"
+import streamifier from "streamifier"
 
-dotenv.config();
+dotenv.config()
 
-const app = express();
+const app = express()
+
+// ✅ Multer setup (no disk storage, just buffer)
+const upload = multer({ storage: multer.memoryStorage() })
+
+// ✅ Cloudinary configuration
+cloudinary.config({
+  cloud_name: "mmesoma",
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+})
 
 // ✅ Middleware setup
 app.use(
   cors({
     origin: [
-      "http://localhost:5173", // local frontend
-      "https://www.soccerfirsteleven.com", // your deployed frontend
+      "http://localhost:5173",
+      "https://www.soccerfirsteleven.com",
     ],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
-);
+)
 
-app.use(express.json());
+app.use(express.json())
 
-// ✅ Helmet security middleware with proper CSP
+// ✅ Helmet security middleware
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -34,63 +46,107 @@ app.use(
         scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
-        imgSrc: ["'self'", "data:", "blob:"],
+        imgSrc: ["'self'", "data:", "blob:", "https://res.cloudinary.com/mmesoma/"],
         connectSrc: [
           "'self'",
-          "https://sccr-fiesta-api.vercel.app", // your API domain
-          "https://www.soccerfirsteleven.com", // your frontend domain
+          "https://sccr-fiesta-api.vercel.app",
+          "https://www.soccerfirsteleven.com",
         ],
       },
     },
   })
-);
+)
 
-// ✅ Connect to MongoDB
+// ✅ MongoDB connection
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB Connected"))
-  .catch((err) => console.error("MongoDB connection error:", err));
+  .catch((err) => console.error("MongoDB connection error:", err))
 
-// ✅ Schema & Model
+// ✅ Mongoose schemas
 const streetSchema = new mongoose.Schema({
   teamName: String,
   community: String,
   captainName: String,
   email: String,
   phone: String,
-  player1: String,
-  player2: String,
-  player3: String,
-  player4: String,
-  player5: String,
+  players: [String],
   message: String,
-});
+  images: [String],
+})
 
-const StreetRegistration = mongoose.model("StreetRegistration", streetSchema);
+const StreetRegistration = mongoose.model("StreetRegistration", streetSchema)
+
+const soccerFiestaSchema = new mongoose.Schema({
+  firstName: String,
+  lastName: String,
+  email: String,
+  phoneNumber: String,
+  secondaryPhone: String,
+  country: String,
+  state: String,
+  age: Number,
+  maritalStatus: String,
+  bio: String,
+  createdAt: { type: Date, default: Date.now },
+})
+
+const SoccerFiesta = mongoose.model("SoccerFiesta", soccerFiestaSchema)
 
 // ✅ Nodemailer setup
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: process.env.EMAIL_USER, // your Gmail
-    pass: process.env.EMAIL_PASS, // app password
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
   },
-});
+})
 
-// ✅ POST route for Street Soccer registration
-app.post("/api/street-soccer/register", async (req, res) => {
+// ✅ Helper: upload file buffer to Cloudinary
+const uploadToCloudinary = (fileBuffer) => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      { upload_preset: "soccer-fiesta" },
+      (error, result) => {
+        if (error) return reject(error)
+        resolve(result.secure_url)
+      }
+    )
+    streamifier.createReadStream(fileBuffer).pipe(uploadStream)
+  })
+}
+
+// ✅ Route: Street Soccer Registration (with image upload)
+app.post("/api/street-soccer/register", upload.any(), async (req, res) => {
   try {
-    const formData = req.body;
+    const formData = req.body
+    const files = req.files || []
+
+    // Upload all files to Cloudinary
+    const imageUrls = await Promise.all(
+      files.map((file) => uploadToCloudinary(file.buffer))
+    )
 
     // Save to MongoDB
-    const newRegistration = new StreetRegistration(formData);
-    await newRegistration.save();
+    const newRegistration = new StreetRegistration({
+      ...formData,
+      players: [
+        formData.player1,
+        formData.player2,
+        formData.player3,
+        formData.player4,
+        formData.player5,
+      ].filter(Boolean),
+      images: imageUrls,
+    })
 
-    // Send email to admin
+    await newRegistration.save()
+
+    // Send email notification
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: "sccrfiesta@gmail.com",
-      subject: "New Street Soccer Registration",
+      subject: "New Street Soccer Registration ⚽",
       html: `
         <h2>New Street Soccer Registration</h2>
         <p><b>Team Name:</b> ${formData.teamName}</p>
@@ -98,27 +154,59 @@ app.post("/api/street-soccer/register", async (req, res) => {
         <p><b>Captain:</b> ${formData.captainName}</p>
         <p><b>Email:</b> ${formData.email}</p>
         <p><b>Phone:</b> ${formData.phone}</p>
-        <p><b>Players:</b> ${[formData.player1, formData.player2, formData.player3, formData.player4, formData.player5]
-          .filter(Boolean)
-          .join(", ")}</p>
+        <p><b>Players:</b> ${newRegistration.players.join(", ")}</p>
         <p><b>Message:</b> ${formData.message || "N/A"}</p>
+        <p><b>Uploaded Images:</b></p>
+        ${imageUrls.map((url) => `<img src="${url}" width="100" style="margin:5px;border-radius:8px"/>`).join("")}
       `,
-    };
+    }
 
-    await transporter.sendMail(mailOptions);
-
-    res.status(201).json({ success: true, message: "Registration successful" });
+    await transporter.sendMail(mailOptions)
+    res.status(201).json({ success: true, message: "✅ Registration successful" })
   } catch (error) {
-    console.error("❌ Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("❌ Error uploading or saving:", error)
+    res.status(500).json({ success: false, message: "Server error" })
   }
-});
+})
 
-// ✅ Default route
+// ✅ Route: Soccer Fiesta Registration
+app.post("/api/soccer-fiesta/register", async (req, res) => {
+  try {
+    const formData = req.body
+    const newRegistration = new SoccerFiesta(formData)
+    await newRegistration.save()
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: "sccrfiesta@gmail.com",
+      subject: "New Soccer Fiesta Registration ⚽",
+      html: `
+        <h2>New Soccer Fiesta Registration</h2>
+        <p><b>Name:</b> ${formData.firstName} ${formData.lastName}</p>
+        <p><b>Email:</b> ${formData.email}</p>
+        <p><b>Phone:</b> ${formData.phoneNumber}</p>
+        <p><b>Secondary Phone:</b> ${formData.secondaryPhone || "N/A"}</p>
+        <p><b>Country:</b> ${formData.country}</p>
+        <p><b>State:</b> ${formData.state}</p>
+        <p><b>Age:</b> ${formData.age}</p>
+        <p><b>Marital Status:</b> ${formData.maritalStatus}</p>
+        <p><b>Bio:</b> ${formData.bio || "N/A"}</p>
+      `,
+    }
+
+    await transporter.sendMail(mailOptions)
+    res.status(201).json({ success: true, message: "✅ Registration successful" })
+  } catch (error) {
+    console.error("❌ Error:", error)
+    res.status(500).json({ success: false, message: "Server error" })
+  }
+})
+
+// ✅ Root route
 app.get("/", (req, res) => {
-  res.send("⚽ SCCR Fiesta API is running securely 🚀");
-});
+  res.send("⚽ SCCR Fiesta API with Cloudinary is running securely 🚀")
+})
 
 // ✅ Start server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+const PORT = process.env.PORT || 5000
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`))
